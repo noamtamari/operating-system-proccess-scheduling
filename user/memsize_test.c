@@ -4,7 +4,7 @@
 int
 main(void)
 {
-  int initial_size, after_alloc, after_free, after_free1;
+  int initial_size, after_alloc, after_free;
   char *p;
 
   // Print initial memory size
@@ -28,6 +28,6 @@ main(void)
   // Print memory size after release
   after_free = memsize();
   printf("Memory size after freeing: %d bytes\n", after_free);
-  
+
   exit(0);
 }
