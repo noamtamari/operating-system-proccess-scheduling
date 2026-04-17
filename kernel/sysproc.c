@@ -96,3 +96,12 @@ sys_memsize(void)
   struct proc *p = myproc();
   return p->sz;
 }
+
+uint64
+sys_co_yield(void)
+{
+  int pid, value;
+  argint(0, &pid);
+  argint(1, &value);
+  return (uint64)co_yield(pid, value);
+}

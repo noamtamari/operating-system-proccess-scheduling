@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "syscall.h"
 
 struct cpu cpus[NCPU];
 
@@ -601,6 +602,91 @@ kill(int pid)
     release(&p->lock);
   }
   return -1;
+}
+
+// Coroutine-style cooperative yield.
+// Hand off execution to target process identified by target_pid,
+// passing value to it. Returns the value passed by the target process,
+// or -1 on error.
+int
+co_yield(int target_pid, int value)
+{
+  struct proc *p = myproc();
+  struct proc *target = 0;
+
+  // Validate arguments.
+  if(target_pid <= 0 || target_pid == p->pid)
+    return -1;
+
+  // Find target process by PID.
+  for(struct proc *candidate = proc; candidate < &proc[NPROC]; candidate++){
+    acquire(&candidate->lock);
+    if(candidate->pid == target_pid){
+      target = candidate;
+      break; // keep target->lock held
+    }
+    release(&candidate->lock);
+  }
+
+  // No process with target_pid exists
+  if(target == 0)
+    return -1;
+
+  // Target must be alive.
+  if(target->killed || target->state == ZOMBIE || target->state == UNUSED){
+    release(&target->lock);
+    return -1;
+  }
+
+  // Check if target is already sleeping in co_yield waiting for us
+  if(target->state == SLEEPING &&
+     target->trapframe->a7 == SYS_co_yield &&
+     (int)target->trapframe->a0 == p->pid){
+
+    // Save target's a1 before we release target->lock to avoid reading wrong data 
+    int received = (int)target->trapframe->a1;
+
+    // Pass our value to target
+    target->trapframe->a0 = (uint64)value;
+
+    // Wake up target.
+    target->chan = 0;
+    target->state = RUNNABLE;
+
+    release(&target->lock);
+    return received;
+
+  } else {
+    // Target is not sleeping in co_yield waiting for us. Either we
+    // arrived first, target is in a different syscall, or target is
+    // in co_yield but waiting for someone else. Sleep until target
+    // calls co_yield(our_pid, ...) and finds us.
+    //
+    // Hold both locks so that no gap exists where the
+    // target could see us as RUNNING and also go to sleep,
+    // causing both processes to sleep forever (deadlock).
+    // No deadlock risk from two locks on a single CPU because
+    // interrupts are disabled while any lock is held.
+    acquire(&p->lock);
+    release(&target->lock);
+
+    // Sleep and wake up not by random wake().
+    // Our trapframe still has a7=SYS_co_yield and a0=target_pid,
+    // which the partner will use to identify us.
+    p->chan = (void*)p;
+    p->state = SLEEPING;
+    sched();
+
+    // Woken up by the partner. Tidy up.
+    p->chan = 0;
+    release(&p->lock);
+
+    // Check if we were killed while sleeping.
+    if(killed(p))
+      return -1;
+
+    return (int)p->trapframe->a0;
+  }
 }
 
 void
