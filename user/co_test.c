@@ -240,6 +240,70 @@ test_target_killed(void)
   wait(0);
 }
 
+// Test 7: child enters co_yield first, then parent responds.
+// Verifies that child can block in co_yield until parent is ready.
+void
+test_child_yields_first(void)
+{
+  printf("--- Test 7: child yields first ---\n");
+  int parent_pid = getpid();
+  int child_pid = fork();
+
+  if(child_pid < 0){
+    printf("fork failed\n");
+    exit(1);
+  }
+
+  if(child_pid == 0){
+    int value = co_yield(parent_pid, 111);
+    if(value == 222){
+      printf("  PASS: child received 222\n");
+      passed++;
+    } else {
+      printf("  FAIL: child received %d, expected 222\n", value);
+      failed++;
+    }
+    exit(0);
+  }
+
+  sleep(2); // let child enter co_yield first
+  int value = co_yield(child_pid, 222);
+  check("parent received 111", value, 111);
+  wait(0);
+}
+
+// Test 8: parent enters co_yield first, then child responds.
+// Verifies that parent can block in co_yield until child is ready.
+void
+test_parent_yields_first(void)
+{
+  printf("--- Test 8: parent yields first ---\n");
+  int parent_pid = getpid();
+  int child_pid = fork();
+
+  if(child_pid < 0){
+    printf("fork failed\n");
+    exit(1);
+  }
+
+  if(child_pid == 0){
+    sleep(2); // let parent enter co_yield first
+    int value = co_yield(parent_pid, 333);
+    if(value == 444){
+      printf("  PASS: child received 444\n");
+      passed++;
+    } else {
+      printf("  FAIL: child received %d, expected 444\n", value);
+      failed++;
+    }
+    exit(0);
+  }
+
+  int value = co_yield(child_pid, 444);
+  check("parent received 333", value, 333);
+  wait(0);
+}
+
 int
 main(void)
 {
@@ -251,6 +315,8 @@ main(void)
   test_three_procs();
   test_killed_while_sleeping();
   test_target_killed();
+  test_child_yields_first();
+  test_parent_yields_first();
 
   printf("\n=== Results: %d passed, %d failed ===\n", passed, failed);
   if(failed == 0)
