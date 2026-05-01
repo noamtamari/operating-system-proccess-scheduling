@@ -623,7 +623,7 @@ co_yield(int target_pid, int value)
   if(target_pid <= 0 || target_pid == p->pid)
     return -1;
 
-  // Find target process
+  // Find target process and keep target->lock held.
   for(struct proc *candidate = proc; candidate < &proc[NPROC]; candidate++){
     acquire(&candidate->lock);
     if(candidate->pid == target_pid){
@@ -640,26 +640,39 @@ co_yield(int target_pid, int value)
     release(&target->lock);
     return -1;
   }
-  
+
   struct cpu *c = mycpu();
   int intena;
-  
+
   /*
    * Case 1:
    * Target is already sleeping inside co_yield and waiting for us.
+   *
+   * target->chan == &p->context means:
+   * target called co_yield(p->pid, value) earlier and is waiting for p.
    */
   if(target->state == SLEEPING &&
      target->chan == (void*)&p->context &&
      target->trapframe->a7 == SYS_co_yield) {
 
-    // Give our value to target.
+    // Give our value to target. This becomes target's co_yield return value.
     target->trapframe->a0 = (uint64)value;
 
-    // Current process is now waiting for the opposite yield later.
+    /*
+     * Follow xv6's process-state convention: update p->chan/state
+     * while holding p->lock.
+     */
+    acquire(&p->lock);
+
     p->chan = (void*)&target->context;
     p->state = SLEEPING;
 
-    // Directly run target.
+    release(&p->lock);
+
+    /*
+     * Directly run target.
+     * target->lock is already held.
+     */
     target->chan = 0;
     target->state = RUNNING;
     c->proc = target;
@@ -669,8 +682,8 @@ co_yield(int target_pid, int value)
     c->intena = intena;
 
     /*
-     * We resume here when someone later switches directly back to us.
-     * Our p->lock is held at this point.
+     * We resume here when another process directly switches back to us.
+     * In this protocol, that process acquired p->lock before switching to p.
      */
     p->chan = 0;
     release(&p->lock);
@@ -683,19 +696,26 @@ co_yield(int target_pid, int value)
 
   /*
    * Case 2:
-   * Target is not waiting inside co_yield yet.
-   *
-   * Since we are not allowed to call sched(), we can only continue
-   * if the target is RUNNABLE. Then we put ourselves to sleep and
-   * directly switch to the target.
+   * Target is not waiting inside co_yield yet, but it is RUNNABLE.
+   * We put ourselves to sleep and directly switch to target.
    */
   if(target->state == RUNNABLE){
 
-    // Current process waits inside co_yield.
+    /*
+     * Follow xv6's process-state convention: update p->chan/state
+     * while holding p->lock.
+     */
+    acquire(&p->lock);
+
     p->chan = (void*)&target->context;
     p->state = SLEEPING;
 
-    // Directly run target instead of going through scheduler.
+    release(&p->lock);
+
+    /*
+     * Directly run target instead of going through the scheduler.
+     * target->lock is already held.
+     */
     target->state = RUNNING;
     c->proc = target;
 
@@ -704,8 +724,8 @@ co_yield(int target_pid, int value)
     c->intena = intena;
 
     /*
-     * We resume here only after target later calls co_yield back to us.
-     * Our p->lock should be held when we resume.
+     * We resume here when another process directly switches back to us.
+     * In this protocol, that process acquired p->lock before switching to p.
      */
     p->chan = 0;
     release(&p->lock);
@@ -717,8 +737,9 @@ co_yield(int target_pid, int value)
   }
 
   /*
-   * If target is not ready and not RUNNABLE, there is no safe process
-   * to switch to without using the scheduler.
+   * Edge case: target exists but is not ready for a direct handoff.
+   * Following the assignment forum clarification, we choose fail-fast
+   * semantics for this case instead of blocking through sched/sleep.
    */
   release(&target->lock);
   return -1;
