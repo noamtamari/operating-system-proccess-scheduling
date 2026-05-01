@@ -464,8 +464,13 @@ scheduler(void)
         c->proc = p;
         swtch(&c->context, &p->context);
 
-        // After swtch returns, c->proc may point to a different proc than p
-        // because co_yield can directly chain process-to-process switches.
+        /*
+        * In regular xv6, the process that returns to the scheduler is the same
+        * process stored in the local variable p. With direct co_yield, p may have
+        * switched directly to another process before returning to the scheduler.
+        * Therefore, release the lock of the process that actually returned, which
+        * is recorded in c->proc.
+        */
         returned_proc = c->proc;
         // Process is done running for now.
         // It should have changed its p->state before coming back.
