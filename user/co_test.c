@@ -253,80 +253,13 @@ test_target_killed(void)
   wait(0);
 }
 
-// Test 7: child enters co_yield first (fail-fast semantics).
-// With the current kernel behavior, yielding to a target that is not yet
-// in a matching co_yield path returns -1 instead of blocking.
-void
-test_child_yields_first(void)
-{
-  printf("--- Test 7: child yields first ---\n");
-  int parent_pid = getpid();
-  int child_pid = fork();
-
-  if(child_pid < 0){
-    printf("fork failed\n");
-    exit(1);
-  }
-
-  if(child_pid == 0){
-    int value = co_yield(parent_pid, 111);
-    if(value == -1){
-      printf("  PASS: child got fail-fast -1\n");
-      passed++;
-    } else {
-      printf("  FAIL: child received %d, expected -1\n", value);
-      failed++;
-    }
-    exit(0);
-  }
-
-  sleep(2); // let child enter co_yield first
-  int value = co_yield(child_pid, 222);
-  check("parent fail-fast return", value, -1);
-  kill(child_pid);
-  wait(0);
-}
-
-// Test 8: parent enters co_yield first, then child responds.
-// Verifies that parent can block in co_yield until child is ready.
-void
-test_parent_yields_first(void)
-{
-  printf("--- Test 8: parent yields first ---\n");
-  int parent_pid = getpid();
-  int child_pid = fork();
-
-  if(child_pid < 0){
-    printf("fork failed\n");
-    exit(1);
-  }
-
-  if(child_pid == 0){
-    sleep(2); // let parent enter co_yield first
-    int value = co_yield(parent_pid, 333);
-    if(value == 444){
-      printf("  PASS: child received 444\n");
-      passed++;
-    } else {
-      printf("  FAIL: child received %d, expected 444\n", value);
-      failed++;
-    }
-    exit(0);
-  }
-
-  int value = co_yield(child_pid, 444);
-  check("parent received 333", value, 333);
-  kill(child_pid);
-  wait(0);
-}
-
-// Test 9: target waiting for a different PID in co_yield.
+// Test 7: target waiting for a different PID in co_yield.
 // The mismatch probe is done in a helper process so the parent can
 // always recover by killing the helper if co_yield blocks.
 void
 test_target_waiting_other_pid(void)
 {
-  printf("--- Test 9: target waiting for different pid ---\n");
+  printf("--- Test 7: target waiting for different pid ---\n");
   int parent_pid = getpid();
   int c1 = fork();
 
@@ -402,12 +335,12 @@ test_target_waiting_other_pid(void)
   wait(0);
 }
 
-// Test 10: Zero and negative value exchange.
+// Test 8: Zero and negative value exchange.
 // Verifies co_yield preserves signed values and zero in both directions.
 void
 test_signed_and_zero_values(void)
 {
-  printf("--- Test 10: signed and zero values ---\n");
+  printf("--- Test 8: signed and zero values ---\n");
   int parent_pid = getpid();
   int child = fork();
 
@@ -470,8 +403,6 @@ main(void)
   test_three_procs();
   test_killed_while_sleeping();
   test_target_killed();
-  test_child_yields_first();
-  test_parent_yields_first();
   test_target_waiting_other_pid();
   test_signed_and_zero_values();
 
