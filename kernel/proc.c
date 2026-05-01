@@ -373,7 +373,7 @@ exit(int status)
 
   // Parent might be sleeping in wait().
   wakeup(p->parent);
-  
+
   acquire(&p->lock);
 
   p->xstate = status;
@@ -446,6 +446,7 @@ void
 scheduler(void)
 {
   struct proc *p;
+  struct proc *returned_proc;
   struct cpu *c = mycpu();
   
   c->proc = 0;
@@ -463,11 +464,16 @@ scheduler(void)
         c->proc = p;
         swtch(&c->context, &p->context);
 
+        // After swtch returns, c->proc may point to a different proc than p
+        // because co_yield can directly chain process-to-process switches.
+        returned_proc = c->proc;
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;
+        release(&returned_proc->lock);
+      } else {
+        release(&p->lock);
       }
-      release(&p->lock);
     }
   }
 }
@@ -614,79 +620,126 @@ co_yield(int target_pid, int value)
   struct proc *p = myproc();
   struct proc *target = 0;
 
-  // Validate arguments.
   if(target_pid <= 0 || target_pid == p->pid)
     return -1;
 
-  // Find target process by PID.
+  // Find target process
   for(struct proc *candidate = proc; candidate < &proc[NPROC]; candidate++){
     acquire(&candidate->lock);
     if(candidate->pid == target_pid){
       target = candidate;
-      break; // keep target->lock held
+      break;
     }
     release(&candidate->lock);
   }
 
-  // No process with target_pid exists
   if(target == 0)
     return -1;
 
-  // Target must be alive.
   if(target->killed || target->state == ZOMBIE || target->state == UNUSED){
     release(&target->lock);
     return -1;
   }
 
-  // Check if target is already sleeping in co_yield waiting for us
+  /*
+   * Case 1:
+   * Target is already sleeping inside co_yield and waiting for us.
+   */
   if(target->state == SLEEPING &&
+     target->chan == (void*)&p->context &&
      target->trapframe->a7 == SYS_co_yield &&
      (int)target->trapframe->a0 == p->pid){
 
-    // Save target's a1 before we release target->lock to avoid reading wrong data 
-    int received = (int)target->trapframe->a1;
+    struct cpu *c = mycpu();
+    int intena;
 
-    // Pass our value to target
+    // Give our value to target.
     target->trapframe->a0 = (uint64)value;
 
-    // Wake up target.
-    target->chan = 0;
-    target->state = RUNNABLE;
-
-    release(&target->lock);
-    return received;
-
-  } else {
-    // Target is not sleeping in co_yield waiting for us. Either we
-    // arrived first, target is in a different syscall, or target is
-    // in co_yield but waiting for someone else. Sleep until target
-    // calls co_yield(our_pid, ...) and finds us.
-    //
-    // Hold both locks so that no gap exists where the
-    // target could see us as RUNNING and also go to sleep,
-    // causing both processes to sleep forever (deadlock).
-    // No deadlock risk from two locks on a single CPU because
-    // interrupts are disabled while any lock is held.
     acquire(&p->lock);
-    release(&target->lock);
 
-    // Sleep and wake up not by random wake().
-    // Our trapframe still has a7=SYS_co_yield and a0=target_pid,
-    // which the partner will use to identify us.
-    p->chan = (void*)p;
+    // Current process is now waiting for the opposite yield later.
+    p->chan = (void*)&target->context;
     p->state = SLEEPING;
-    sched();
 
-    // Woken up by the partner. Tidy up.
+    // Directly run target.
+    target->chan = 0;
+    target->state = RUNNING;
+    c->proc = target;
+
+    /*
+     * Release current process lock so the target can later acquire it
+     * when yielding back to us.
+     *
+     * Keep target->lock held. The target resumes from its old swtch,
+     * and xv6 expects the resumed process to hold its own lock.
+     */
+    release(&p->lock);
+
+    intena = c->intena;
+    swtch(&p->context, &target->context);
+    c->intena = intena;
+
+    /*
+     * We resume here when someone later switches directly back to us.
+     * Our p->lock is held at this point.
+     */
     p->chan = 0;
     release(&p->lock);
 
-    // Check if we were killed while sleeping.
     if(killed(p))
       return -1;
 
     return (int)p->trapframe->a0;
   }
+
+  /*
+   * Case 2:
+   * Target is not waiting inside co_yield yet.
+   *
+   * Since we are not allowed to call sched(), we can only continue
+   * if the target is RUNNABLE. Then we put ourselves to sleep and
+   * directly switch to the target.
+   */
+  if(target->state == RUNNABLE){
+    struct cpu *c = mycpu();
+    int intena;
+
+    acquire(&p->lock);
+
+    // Current process waits inside co_yield.
+    p->chan = (void*)&target->context;
+    p->state = SLEEPING;
+
+    // Directly run target instead of going through scheduler.
+    target->state = RUNNING;
+    c->proc = target;
+
+    release(&p->lock);
+
+    intena = c->intena;
+    swtch(&p->context, &target->context);
+    c->intena = intena;
+
+    /*
+     * We resume here only after target later calls co_yield back to us.
+     * Our p->lock should be held when we resume.
+     */
+    p->chan = 0;
+    release(&p->lock);
+
+    if(killed(p))
+      return -1;
+
+    return (int)p->trapframe->a0;
+  }
+
+  /*
+   * If target is not ready and not RUNNABLE, there is no safe process
+   * to switch to without using the scheduler.
+   */
+  release(&target->lock);
+  return -1;
 }
 
 void
