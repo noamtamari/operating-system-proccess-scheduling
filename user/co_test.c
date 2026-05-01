@@ -336,9 +336,9 @@ test_target_waiting_other_pid(void)
   }
 
   if(c1 == 0){
-    int c2 = co_yield(parent_pid, getpid());
+    int c2 = co_yield(parent_pid, getpid()); // C1 receives C2's pid
     // Enter co_yield waiting for C2 (not parent).
-    co_yield(c2, 900);
+    co_yield(c2, 900);// C1 now sleeps, waiting for C2
     exit(0);
   }
 
@@ -356,7 +356,7 @@ test_target_waiting_other_pid(void)
     volatile int spin = 0;
     for(int i = 0; i < 20000000; i++)
       spin += i;
-    sleep(1000);
+    sleep(1000); // sleep long so we don't accidentally reap before C1 can yield to us
     exit(0);
   }
 
