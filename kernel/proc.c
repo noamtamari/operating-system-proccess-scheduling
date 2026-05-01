@@ -640,7 +640,10 @@ co_yield(int target_pid, int value)
     release(&target->lock);
     return -1;
   }
-
+  
+  struct cpu *c = mycpu();
+  int intena;
+  
   /*
    * Case 1:
    * Target is already sleeping inside co_yield and waiting for us.
@@ -650,13 +653,8 @@ co_yield(int target_pid, int value)
      target->trapframe->a7 == SYS_co_yield &&
      (int)target->trapframe->a0 == p->pid){
 
-    struct cpu *c = mycpu();
-    int intena;
-
     // Give our value to target.
     target->trapframe->a0 = (uint64)value;
-
-    acquire(&p->lock);
 
     // Current process is now waiting for the opposite yield later.
     p->chan = (void*)&target->context;
@@ -666,15 +664,6 @@ co_yield(int target_pid, int value)
     target->chan = 0;
     target->state = RUNNING;
     c->proc = target;
-
-    /*
-     * Release current process lock so the target can later acquire it
-     * when yielding back to us.
-     *
-     * Keep target->lock held. The target resumes from its old swtch,
-     * and xv6 expects the resumed process to hold its own lock.
-     */
-    release(&p->lock);
 
     intena = c->intena;
     swtch(&p->context, &target->context);
@@ -702,10 +691,6 @@ co_yield(int target_pid, int value)
    * directly switch to the target.
    */
   if(target->state == RUNNABLE){
-    struct cpu *c = mycpu();
-    int intena;
-
-    acquire(&p->lock);
 
     // Current process waits inside co_yield.
     p->chan = (void*)&target->context;
@@ -714,8 +699,6 @@ co_yield(int target_pid, int value)
     // Directly run target instead of going through scheduler.
     target->state = RUNNING;
     c->proc = target;
-
-    release(&p->lock);
 
     intena = c->intena;
     swtch(&p->context, &target->context);

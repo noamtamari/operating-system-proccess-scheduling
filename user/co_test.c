@@ -481,7 +481,7 @@ main(void)
   else
     printf("SOME TESTS FAILED\n");
 
-  sleep(5);  
+  sleep(20);  
   test_infinite_co_yield();
   exit(0);
 }
