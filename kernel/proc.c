@@ -650,8 +650,7 @@ co_yield(int target_pid, int value)
    */
   if(target->state == SLEEPING &&
      target->chan == (void*)&p->context &&
-     target->trapframe->a7 == SYS_co_yield &&
-     (int)target->trapframe->a0 == p->pid){
+     target->trapframe->a7 == SYS_co_yield) {
 
     // Give our value to target.
     target->trapframe->a0 = (uint64)value;
